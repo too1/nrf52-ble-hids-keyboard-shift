@@ -55,6 +55,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <ctype.h>
 #include "nordic_common.h"
 #include "nrf.h"
 #include "nrf_assert.h"
@@ -143,7 +144,7 @@
 #define FEATURE_REPORT_MAX_LEN              2                                          /**< Maximum length of Feature Report. */
 #define FEATURE_REPORT_INDEX                0                                          /**< Index of Feature Report. */
 
-#define MAX_BUFFER_ENTRIES                  5                                          /**< Number of elements that can be enqueued */
+#define MAX_BUFFER_ENTRIES                  32                                         /**< Number of elements that can be enqueued */
 
 #define BASE_USB_HID_SPEC_VERSION           0x0101                                     /**< Version number of base USB HID Specification implemented by this application. */
 
@@ -198,6 +199,7 @@ typedef struct hid_key_buffer
 {
     uint8_t      data_offset; /**< Max Data that can be buffered for all entries */
     uint8_t      data_len;    /**< Total length of data */
+    bool         shift_enable;/**< Set the shift key for this packet */
     uint8_t    * p_data;      /**< Scanned key pattern */
     ble_hids_t * p_instance;  /**< Identifies peer and service instance */
 } buffer_entry_t;
@@ -267,7 +269,7 @@ static uint8_t m_caps_off_key_scan_str[] = /**< Key pattern to be sent when the 
     0x09,       /* Key f */
 };
 
-
+static uint8_t m_mixed_caps_test_string[] = "CAPS12mIxEd45nocaps";
 
 static void on_hids_evt(ble_hids_t * p_hids, ble_hids_evt_t * p_evt);
 
@@ -825,7 +827,8 @@ static uint32_t send_key_scan_press_release(ble_hids_t * p_hids,
                                             uint8_t    * p_key_pattern,
                                             uint16_t     pattern_len,
                                             uint16_t     pattern_offset,
-                                            uint16_t   * p_actual_len)
+                                            uint16_t   * p_actual_len,
+                                            bool shift)
 {
     ret_code_t err_code;
     uint16_t offset;
@@ -849,7 +852,7 @@ static uint32_t send_key_scan_press_release(ble_hids_t * p_hids,
         // Copy the scan code.
         memcpy(data + SCAN_CODE_POS + offset, p_key_pattern + offset, data_len - offset);
 
-        if (bsp_button_is_pressed(SHIFT_BUTTON_ID))
+        if (shift)
         {
             data[MODIFIER_KEY_POS] |= SHIFT_KEY_CODE;
         }
@@ -924,7 +927,8 @@ static void buffer_init(void)
 static uint32_t buffer_enqueue(ble_hids_t * p_hids,
                                uint8_t    * p_key_pattern,
                                uint16_t     pattern_len,
-                               uint16_t     offset)
+                               uint16_t     offset,
+                               bool         shift)
 {
     buffer_entry_t * element;
     uint32_t         err_code = NRF_SUCCESS;
@@ -942,6 +946,7 @@ static uint32_t buffer_enqueue(ble_hids_t * p_hids,
         element->p_data      = p_key_pattern;
         element->data_offset = offset;
         element->data_len    = pattern_len;
+        element->shift_enable = shift;
 
         buffer_list.count++;
         buffer_list.wp++;
@@ -990,7 +995,8 @@ static uint32_t buffer_dequeue(bool tx_flag)
                                                    p_element->p_data,
                                                    p_element->data_len,
                                                    p_element->data_offset,
-                                                   &actual_len);
+                                                   &actual_len,
+                                                   p_element->shift_enable);
             // An additional notification is needed for release of all keys, therefore check
             // is for actual_len <= element->data_len and not actual_len < element->data_len
             if ((err_code == NRF_ERROR_RESOURCES) && (actual_len <= p_element->data_len))
@@ -1034,7 +1040,8 @@ static void keys_send(uint8_t key_pattern_len, uint8_t * p_key_pattern)
                                            p_key_pattern,
                                            key_pattern_len,
                                            0,
-                                           &actual_len);
+                                           &actual_len,
+                                           false);
     // An additional notification is needed for release of all keys, therefore check
     // is for actual_len <= key_pattern_len and not actual_len < key_pattern_len.
     if ((err_code == NRF_ERROR_RESOURCES) && (actual_len <= key_pattern_len))
@@ -1043,7 +1050,7 @@ static void keys_send(uint8_t key_pattern_len, uint8_t * p_key_pattern)
         // Rationale: Its better to have a a few keys missing than have a system
         // reset. Recommendation is to work out most optimal value for
         // MAX_BUFFER_ENTRIES to minimize chances of buffer queue full condition
-        UNUSED_VARIABLE(buffer_enqueue(&m_hids, p_key_pattern, key_pattern_len, actual_len));
+        UNUSED_VARIABLE(buffer_enqueue(&m_hids, p_key_pattern, key_pattern_len, actual_len, false));
     }
 
 
@@ -1055,6 +1062,76 @@ static void keys_send(uint8_t key_pattern_len, uint8_t * p_key_pattern)
        )
     {
         APP_ERROR_HANDLER(err_code);
+    }
+}
+
+/**@brief Function for sending sample key presses to the peer.
+ *
+ * @param[in]   key_pattern_len   Pattern length.
+ * @param[in]   p_key_pattern     Pattern to be sent.
+ */
+static void keys_mixed_shift_send(uint8_t key_pattern_len, uint8_t * p_key_pattern)
+{
+    ret_code_t err_code;
+    uint16_t actual_len;
+    static uint8_t keycode_buffer[255];
+    uint8_t *hid_buf_ptr = keycode_buffer;
+    bool current_shift_state;
+
+    // Convert the input string from ASCII to HID key codes, and store it in a temporary buffer
+    for(int i = 0; i < key_pattern_len; i++)
+    {
+        uint8_t current_char = p_key_pattern[i];
+        if(current_char >= 'a' && current_char <= 'z') keycode_buffer[i] = current_char - 'a' + 0x04;
+        else if(current_char >= 'A' && current_char <= 'Z') keycode_buffer[i] = current_char - 'A' + 0x04;
+        else if(current_char >= '1' && current_char <= '9') keycode_buffer[i] = current_char - '1' + 0x1E;
+        else if(current_char == '0') keycode_buffer[i] = 0x27;
+        else keycode_buffer[i] = 0;
+    }
+    
+    // Loop through all the bytes in the buffer, and split the string into smaller updates based on shift status
+    uint8_t cur_len = 0;
+    current_shift_state = isupper(p_key_pattern[0]);
+    for(int i = 0; i < key_pattern_len; i++)
+    {
+        // Send a new HID packet in one of three cases:
+        // 1) The current length is 6, which is the maximum allowed number of characters in a single HID packet
+        // 2) The current_shift_state has changed, which means we have to send the previous bytes before we can change the shift state for the current character
+        // 3) i == (key_pattern_len - 1), which means we are at the very last byte and need to send the last bytes of the input string
+        if(cur_len == 6 || current_shift_state != isupper(p_key_pattern[i]) || i == (key_pattern_len - 1))
+        {
+            // When we are at the last byte of the string cur_len has not had time to get incremented for the last byte. 
+            if(i == (key_pattern_len - 1)) cur_len++;
+            
+            // Try to send the HID packet
+            err_code = send_key_scan_press_release(&m_hids, hid_buf_ptr, cur_len, 0, &actual_len, current_shift_state);
+
+            // An additional notification is needed for release of all keys, therefore check
+            // is for actual_len <= key_pattern_len and not actual_len < key_pattern_len.
+            if ((err_code == NRF_ERROR_RESOURCES) && (actual_len <= key_pattern_len))
+            {
+                // Buffer enqueue routine return value is not intentionally checked.
+                // Rationale: Its better to have a a few keys missing than have a system
+                // reset. Recommendation is to work out most optimal value for
+                // MAX_BUFFER_ENTRIES to minimize chances of buffer queue full condition
+                UNUSED_VARIABLE(buffer_enqueue(&m_hids, hid_buf_ptr, cur_len, actual_len, current_shift_state));
+            }
+
+            if ((err_code != NRF_SUCCESS) &&
+                (err_code != NRF_ERROR_INVALID_STATE) &&
+                (err_code != NRF_ERROR_RESOURCES) &&
+                (err_code != NRF_ERROR_BUSY) &&
+                (err_code != BLE_ERROR_GATTS_SYS_ATTR_MISSING)
+               )
+            {
+                APP_ERROR_HANDLER(err_code);
+            }
+
+            hid_buf_ptr += cur_len;
+            cur_len = 0;
+            current_shift_state = isupper(p_key_pattern[i]);
+        }
+        cur_len++;
     }
 }
 
@@ -1422,14 +1499,7 @@ static void bsp_event_handler(bsp_event_t event)
         case BSP_EVENT_KEY_0:
             if (m_conn_handle != BLE_CONN_HANDLE_INVALID)
             {
-                keys_send(1, p_key);
-                p_key++;
-                size++;
-                if (size == MAX_KEYS_IN_ONE_REPORT)
-                {
-                    p_key = m_sample_key_press_scan_str;
-                    size  = 0;
-                }
+                keys_mixed_shift_send(strlen(m_mixed_caps_test_string), m_mixed_caps_test_string);
             }
             break;
 
