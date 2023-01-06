@@ -269,7 +269,7 @@ static uint8_t m_caps_off_key_scan_str[] = /**< Key pattern to be sent when the 
     0x09,       /* Key f */
 };
 
-static uint8_t m_mixed_caps_test_string[] = "CA!PS12mIxEd45noc#aps";
+static uint8_t m_mixed_caps_test_string[] = "CA!PSS12mIxEed45noc#1!1!aps";
 
 static void on_hids_evt(ble_hids_t * p_hids, ble_hids_evt_t * p_evt);
 
@@ -1131,11 +1131,24 @@ static void keys_mixed_shift_send(uint8_t key_pattern_len, uint8_t * p_key_patte
     current_shift_state = shift_buffer[0];
     for(int i = 0; i < key_pattern_len; i++)
     {
+        // Loop through the currently buffered keycodes to check if they match the next keycode in the buffer
+        bool repeated_key_detected = false;
+        for(int j = 0; j < cur_len; j++)
+        {
+            if(hid_buf_ptr[j] == keycode_buffer[i])
+            {
+                repeated_key_detected = true;
+                break;
+            }
+        }
+
         // Send a new HID packet in one of three cases:
         // 1) The current length is 6, which is the maximum allowed number of characters in a single HID packet
         // 2) The current_shift_state has changed, which means we have to send the previous bytes before we can change the shift state for the current character
         // 3) i == (key_pattern_len - 1), which means we are at the very last byte and need to send the last bytes of the input string
-        if(cur_len == 6 || current_shift_state != shift_buffer[i] || i == (key_pattern_len - 1))
+        // 4) repeated_key_detected is true, which means that the next key matches one of the previously buffered keys
+        if(cur_len == 6 || current_shift_state != shift_buffer[i] || 
+           i == (key_pattern_len - 1) || repeated_key_detected)
         {
             // When we are at the last byte of the string cur_len has not had time to get incremented for the last byte. 
             if(i == (key_pattern_len - 1)) cur_len++;
