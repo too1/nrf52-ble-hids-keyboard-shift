@@ -1075,6 +1075,7 @@ static void keys_mixed_shift_send(uint8_t key_pattern_len, uint8_t * p_key_patte
     ret_code_t err_code;
     uint16_t actual_len;
     static uint8_t keycode_buffer[255];
+    static bool shift_buffer[255];
     uint8_t *hid_buf_ptr = keycode_buffer;
     bool current_shift_state;
 
@@ -1082,23 +1083,43 @@ static void keys_mixed_shift_send(uint8_t key_pattern_len, uint8_t * p_key_patte
     for(int i = 0; i < key_pattern_len; i++)
     {
         uint8_t current_char = p_key_pattern[i];
-        if(current_char >= 'a' && current_char <= 'z') keycode_buffer[i] = current_char - 'a' + 0x04;
-        else if(current_char >= 'A' && current_char <= 'Z') keycode_buffer[i] = current_char - 'A' + 0x04;
-        else if(current_char >= '1' && current_char <= '9') keycode_buffer[i] = current_char - '1' + 0x1E;
-        else if(current_char == '0') keycode_buffer[i] = 0x27;
-        else keycode_buffer[i] = 0;
+        if(current_char >= 'a' && current_char <= 'z')
+        {
+            keycode_buffer[i] = current_char - 'a' + 0x04;
+            shift_buffer[i] = false;
+        }
+        else if(current_char >= 'A' && current_char <= 'Z')
+        {
+            keycode_buffer[i] = current_char - 'A' + 0x04;
+            shift_buffer[i] = true;
+        }
+        else if(current_char >= '1' && current_char <= '9')
+        {
+            keycode_buffer[i] = current_char - '1' + 0x1E;
+            shift_buffer[i] = false;
+        }
+        else if(current_char == '0')
+        {
+            keycode_buffer[i] = 0x27;
+            shift_buffer[i] = false;
+        }
+        else 
+        {
+            keycode_buffer[i] = 0;
+            shift_buffer[i] = false;
+        }
     }
     
     // Loop through all the bytes in the buffer, and split the string into smaller updates based on shift status
     uint8_t cur_len = 0;
-    current_shift_state = isupper(p_key_pattern[0]);
+    current_shift_state = shift_buffer[0];
     for(int i = 0; i < key_pattern_len; i++)
     {
         // Send a new HID packet in one of three cases:
         // 1) The current length is 6, which is the maximum allowed number of characters in a single HID packet
         // 2) The current_shift_state has changed, which means we have to send the previous bytes before we can change the shift state for the current character
         // 3) i == (key_pattern_len - 1), which means we are at the very last byte and need to send the last bytes of the input string
-        if(cur_len == 6 || current_shift_state != isupper(p_key_pattern[i]) || i == (key_pattern_len - 1))
+        if(cur_len == 6 || current_shift_state != shift_buffer[i] || i == (key_pattern_len - 1))
         {
             // When we are at the last byte of the string cur_len has not had time to get incremented for the last byte. 
             if(i == (key_pattern_len - 1)) cur_len++;
@@ -1129,7 +1150,7 @@ static void keys_mixed_shift_send(uint8_t key_pattern_len, uint8_t * p_key_patte
 
             hid_buf_ptr += cur_len;
             cur_len = 0;
-            current_shift_state = isupper(p_key_pattern[i]);
+            current_shift_state = shift_buffer[i];
         }
         cur_len++;
     }
