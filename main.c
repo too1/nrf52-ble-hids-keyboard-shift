@@ -269,7 +269,7 @@ static uint8_t m_caps_off_key_scan_str[] = /**< Key pattern to be sent when the 
     0x09,       /* Key f */
 };
 
-static uint8_t m_mixed_caps_test_string[] = "CAPS12mIxEd45nocaps";
+static uint8_t m_mixed_caps_test_string[] = "CA!PS12mIxEd45noc#aps";
 
 static void on_hids_evt(ble_hids_t * p_hids, ble_hids_evt_t * p_evt);
 
@@ -1103,6 +1103,22 @@ static void keys_mixed_shift_send(uint8_t key_pattern_len, uint8_t * p_key_patte
             keycode_buffer[i] = 0x27;
             shift_buffer[i] = false;
         }
+        else if(current_char == '!')
+        {
+            keycode_buffer[i] = 0x1E;
+            shift_buffer[i] = true;
+        }
+        else if(current_char == '@')
+        {
+            keycode_buffer[i] = 0x1F;
+            shift_buffer[i] = true;
+        }
+        else if(current_char == '#')
+        {
+            keycode_buffer[i] = 0x20;
+            shift_buffer[i] = true;
+        }
+        // TODO: Add the remaining special characters on the 0-9 keys
         else 
         {
             keycode_buffer[i] = 0;
